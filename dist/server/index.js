@@ -16,8 +16,9 @@ async function passwordHash(password, salt) {
   return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: Uint8Array.from(salt.match(/.{2}/g), (b) => parseInt(b, 16)), iterations: 1e5 }, key, 256));
 }
 var cookie = (value, maxAge) => `vertice_session=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+var BODY_TYPES = ["", "sport", "hatch", "sedan", "suv", "pickup"];
 function safeListing(row) {
-  return { id: row.id, sellerId: row.sellerId, make: row.make, model: row.model, year: row.year, mileage: row.mileage, price: row.price, location: row.location, image: row.image, description: row.description, whatsapp: row.whatsapp, createdAt: row.createdAt };
+  return { id: row.id, sellerId: row.sellerId, make: row.make, model: row.model, year: row.year, mileage: row.mileage, price: row.price, location: row.location, bodyType: row.bodyType || "", image: row.image, description: row.description, whatsapp: row.whatsapp, createdAt: row.createdAt };
 }
 async function body(request) {
   try {
@@ -39,9 +40,9 @@ var RESET_LIFETIME = 30 * 60 * 1e3;
 var RESET_COOLDOWN = 60 * 1e3;
 function listingInput(data) {
   if (!data || typeof data !== "object") return null;
-  const make = String(data.make || "").trim(), model = String(data.model || "").trim(), location = String(data.location || "").trim(), description = String(data.description || "").trim(), year = Number(data.year), mileage = Number(data.mileage), price = Number(data.price), whatsapp = String(data.whatsapp || "").replace(/\D/g, ""), image = String(data.image || "").trim();
-  if (make.length < 2 || make.length > 40 || model.length < 1 || model.length > 80 || location.length < 3 || location.length > 80 || !Number.isInteger(year) || year < 1950 || year > (/* @__PURE__ */ new Date()).getFullYear() + 1 || !Number.isInteger(mileage) || mileage < 0 || mileage > 2e6 || !Number.isSafeInteger(price) || price < 100 || price > 9999999999 || !/^[1-9][0-9]{11,12}$/.test(whatsapp) || description.length > 800 || image && !/^cars\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/.test(image)) return null;
-  return { make, model, location, description, year, mileage, price, whatsapp, image: image || null };
+  const make = String(data.make || "").trim(), model = String(data.model || "").trim(), location = String(data.location || "").trim(), bodyType = String(data.bodyType || "").trim(), description = String(data.description || "").trim(), year = Number(data.year), mileage = Number(data.mileage), price = Number(data.price), whatsapp = String(data.whatsapp || "").replace(/\D/g, ""), image = String(data.image || "").trim();
+  if (make.length < 2 || make.length > 40 || model.length < 1 || model.length > 80 || location.length < 3 || location.length > 80 || !BODY_TYPES.includes(bodyType) || !Number.isInteger(year) || year < 1950 || year > (/* @__PURE__ */ new Date()).getFullYear() + 1 || !Number.isInteger(mileage) || mileage < 0 || mileage > 2e6 || !Number.isSafeInteger(price) || price < 100 || price > 9999999999 || !/^[1-9][0-9]{11,12}$/.test(whatsapp) || description.length > 800 || image && !/^cars\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/.test(image)) return null;
+  return { make, model, location, bodyType, description, year, mileage, price, whatsapp, image: image || null };
 }
 var index_default = { async fetch(request, env) {
   const url = new URL(request.url);
@@ -83,7 +84,7 @@ var index_default = { async fetch(request, env) {
       if (storeMatch && request.method === "GET") {
         const store = await db.prepare("SELECT id,display_name AS displayName,store_slug AS storeSlug FROM sellers WHERE store_slug=?").bind(storeMatch[1]).first();
         if (!store) return json({ error: "Esta loja n\xE3o foi encontrada." }, 404);
-        const rows = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,sellers.display_name AS sellerName FROM listings JOIN sellers ON sellers.id=listings.seller_id WHERE sellers.id=? ORDER BY listings.created_at DESC LIMIT 100").bind(store.id).all();
+        const rows = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.body_type AS bodyType,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,sellers.display_name AS sellerName FROM listings JOIN sellers ON sellers.id=listings.seller_id WHERE sellers.id=? ORDER BY listings.created_at DESC LIMIT 100").bind(store.id).all();
         return json({ store, listings: rows.results });
       }
       if (url.pathname === "/api/metrics" && request.method === "POST") {
@@ -210,10 +211,10 @@ Se voc\xEA n\xE3o pediu a redefini\xE7\xE3o, ignore este e-mail.`, html: `<p>Rec
         if (url.searchParams.get("mine") === "1") {
           const seller = await currentSeller(request, db);
           if (!seller) return json({ error: "Entre na sua conta." }, 401);
-          const rows2 = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,COALESCE(listing_metrics.views,0) AS views,COALESCE(listing_metrics.whatsapp_clicks,0) AS whatsappClicks FROM listings LEFT JOIN listing_metrics ON listing_metrics.listing_id=listings.id WHERE listings.seller_id=? ORDER BY listings.created_at DESC").bind(seller.id).all();
+          const rows2 = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.body_type AS bodyType,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,COALESCE(listing_metrics.views,0) AS views,COALESCE(listing_metrics.whatsapp_clicks,0) AS whatsappClicks FROM listings LEFT JOIN listing_metrics ON listing_metrics.listing_id=listings.id WHERE listings.seller_id=? ORDER BY listings.created_at DESC").bind(seller.id).all();
           return json({ listings: rows2.results.map((row) => ({ ...safeListing(row), views: row.views, whatsappClicks: row.whatsappClicks })) });
         }
-        const rows = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,sellers.display_name AS sellerName FROM listings JOIN sellers ON sellers.id=listings.seller_id ORDER BY listings.created_at DESC LIMIT 100").all();
+        const rows = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.body_type AS bodyType,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,sellers.display_name AS sellerName FROM listings JOIN sellers ON sellers.id=listings.seller_id ORDER BY listings.created_at DESC LIMIT 100").all();
         return json({ listings: rows.results });
       }
       if (url.pathname === "/api/listings" && request.method === "POST") {
@@ -222,7 +223,7 @@ Se voc\xEA n\xE3o pediu a redefini\xE7\xE3o, ignore este e-mail.`, html: `<p>Rec
         const input = listingInput(await body(request));
         if (!input) return json({ error: "Confira as informa\xE7\xF5es. Use WhatsApp com c\xF3digo do pa\xEDs e DDD (55 + DDD + n\xFAmero)." }, 400);
         const id = crypto.randomUUID(), createdAt = Date.now();
-        await db.prepare("INSERT INTO listings(id,seller_id,make,model,year,mileage,price,location,image,description,whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, seller.id, input.make, input.model, input.year, input.mileage, input.price, input.location, input.image, input.description, input.whatsapp, createdAt).run();
+        await db.prepare("INSERT INTO listings(id,seller_id,make,model,year,mileage,price,location,body_type,image,description,whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, seller.id, input.make, input.model, input.year, input.mileage, input.price, input.location, input.bodyType, input.image, input.description, input.whatsapp, createdAt).run();
         return json({ listing: { id, ...input, sellerId: seller.id, createdAt, sellerName: seller.displayName } }, 201);
       }
       const listingMatch = url.pathname.match(/^\/api\/listings\/([\w-]+)$/);
@@ -238,7 +239,7 @@ Se voc\xEA n\xE3o pediu a redefini\xE7\xE3o, ignore este e-mail.`, html: `<p>Rec
         const input = listingInput(await body(request));
         if (!input) return json({ error: "Confira os dados do an\xFAncio." }, 400);
         const prior = await db.prepare("SELECT image FROM listings WHERE id=? AND seller_id=?").bind(listingMatch[1], seller.id).first();
-        const result = await db.prepare("UPDATE listings SET make=?,model=?,year=?,mileage=?,price=?,location=?,image=?,description=?,whatsapp=? WHERE id=? AND seller_id=?").bind(input.make, input.model, input.year, input.mileage, input.price, input.location, input.image, input.description, input.whatsapp, listingMatch[1], seller.id).run();
+        const result = await db.prepare("UPDATE listings SET make=?,model=?,year=?,mileage=?,price=?,location=?,body_type=?,image=?,description=?,whatsapp=? WHERE id=? AND seller_id=?").bind(input.make, input.model, input.year, input.mileage, input.price, input.location, input.bodyType, input.image, input.description, input.whatsapp, listingMatch[1], seller.id).run();
         if (result.meta.changes && prior?.image && prior.image !== input.image) await env.BUCKET?.delete(prior.image);
         return result.meta.changes ? json({ ok: true }) : json({ error: "O an\xFAncio n\xE3o foi encontrado." }, 404);
       }

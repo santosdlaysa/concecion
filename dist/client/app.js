@@ -3,15 +3,16 @@ import {OrbitControls} from './vendor/OrbitControls.js';
 import {GLTFLoader} from './vendor/GLTFLoader.js';
 import {RoomEnvironment} from './vendor/RoomEnvironment.js';
 import {createArticulatedCar} from './rig.js';
+import {createGenericCar,GENERIC_TYPES} from './carfactory.js';
 
 const $=id=>document.getElementById(id);
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-const state={rotation:!reduced.matches,doors:false,trunk:false,color:'#758f7b',ready:false};
+const state={rotation:!reduced.matches,doors:false,trunk:false,color:'#758f7b',ready:false,hasParts:true};
 let renderer,controls,car,scene,camera,visible=true;
 function announce(text){$('announcement').textContent=text;}
 function sync(){
   $('rotate').setAttribute('aria-pressed',String(state.rotation));$('rotation-state').textContent=state.rotation?'Em movimento':'Pausada';
-  for(const key of ['doors','trunk']){const b=$(key);b.disabled=!state.ready;b.setAttribute('aria-pressed',String(state[key]));b.querySelector('small').textContent=key==='doors'?(state[key]?'Fechar portas':'Abrir portas'):(state[key]?'Fechar compartimento':'Abrir compartimento');b.querySelector('.plus').textContent=state[key]?'−':'+';}
+  for(const key of ['doors','trunk']){const b=$(key);b.disabled=!state.ready||!state.hasParts;b.setAttribute('aria-pressed',String(state[key]));b.querySelector('small').textContent=key==='doors'?(state.hasParts?(state[key]?'Fechar portas':'Abrir portas'):'Só no Porsche 911'):(state.hasParts?(state[key]?'Fechar compartimento':'Abrir compartimento'):'Só no Porsche 911');b.querySelector('.plus').textContent=state[key]?'−':'+';}
   if(controls)controls.autoRotate=state.rotation;
 }
 function setPart(key,open){if(!state.ready)throw new Error('O modelo ainda está carregando.');state[key]=open;state.rotation=false;sync();announce(key==='doors'?(open?'Portas abertas':'Portas fechadas'):(open?'Porta-malas dianteiro aberto':'Porta-malas fechado'));}
@@ -35,12 +36,31 @@ async function init(){
     controls.addEventListener('start',()=>{state.rotation=false;sync();});
     const resize=()=>{const {clientWidth:w,clientHeight:h}=$('scene');camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h);};new ResizeObserver(resize).observe($('scene'));resize();
     let previous=0;
-    renderer.setAnimationLoop(time=>{const dt=Math.min((time-previous)/1000,.05);previous=time;if(document.hidden||!visible)return;if(car){const speed=reduced.matches?1:1-Math.exp(-dt*7);const target=state.doors?1.06:0;car.userData.left.rotation.y=THREE.MathUtils.lerp(car.userData.left.rotation.y,-target,speed);car.userData.right.rotation.y=THREE.MathUtils.lerp(car.userData.right.rotation.y,target,speed);car.userData.trunk.rotation.x=THREE.MathUtils.lerp(car.userData.trunk.rotation.x,state.trunk?-1.1:0,speed);}controls.update(dt);renderer.render(scene,camera);});
+    renderer.setAnimationLoop(time=>{const dt=Math.min((time-previous)/1000,.05);previous=time;if(document.hidden||!visible)return;if(car&&car.userData.left){const speed=reduced.matches?1:1-Math.exp(-dt*7);const target=state.doors?1.06:0;car.userData.left.rotation.y=THREE.MathUtils.lerp(car.userData.left.rotation.y,-target,speed);car.userData.right.rotation.y=THREE.MathUtils.lerp(car.userData.right.rotation.y,target,speed);car.userData.trunk.rotation.x=THREE.MathUtils.lerp(car.userData.trunk.rotation.x,state.trunk?-1.1:0,speed);}controls.update(dt);renderer.render(scene,camera);});
     new IntersectionObserver(entries=>{visible=entries[0].isIntersecting;}).observe($('showroom'));
-    const gltf=await new GLTFLoader().loadAsync('./models/porsche.glb',progress=>{if(progress.total)$('loading-text').textContent=`Preparando seu Porsche… ${Math.round(progress.loaded/progress.total*100)}%`;});
-    car=createArticulatedCar(gltf.scene);scene.add(car);car.userData.paint.color.set(state.color);state.ready=true;$('loading').style.display='none';sync();announce('Porsche carregado. Explore o carro e abra as portas ou o porta-malas.');
+    await showCar('sport');
   }catch(error){console.error(error);failure('Não foi possível carregar o showroom 3D. Verifique sua conexão e o suporte a WebGL do navegador.');}
 }
+let porscheCar=null;
+async function loadPorsche(){if(porscheCar)return porscheCar;const gltf=await new GLTFLoader().loadAsync('./models/porsche.glb',progress=>{if(progress.total)$('loading-text').textContent=`Preparando o modelo 3D… ${Math.round(progress.loaded/progress.total*100)}%`;});porscheCar=createArticulatedCar(gltf.scene);return porscheCar;}
+const genericCache=new Map();
+const showroomDefaults={brand:'PORSCHE',name:'911 Carrera 4S',tagline:'O espírito de um original.',watermark:'911',caption:'01 — PORSCHE 911 CARRERA 4S'};
+function setShowroomInfo(kind,meta){const info=meta?{brand:String(meta.make||'').toUpperCase(),name:String(meta.model||''),tagline:kind==='sport'?'Exibido no showroom como cupê esportivo.':'Modelo 3D ilustrativo do tipo de carroceria.',watermark:String(meta.model||'').split(' ')[0].toUpperCase().slice(0,6),caption:`${meta.make} ${meta.model}`.toUpperCase()}:showroomDefaults;$('showroom-brand').textContent=info.brand;$('showroom-name').textContent=info.name;$('showroom-tagline').textContent=info.tagline;$('showroom-watermark').textContent=info.watermark;$('showroom-caption').textContent=info.caption;}
+async function showCar(kind='sport',meta=null){
+  try{
+    state.doors=false;state.trunk=false;state.ready=false;state.hasParts=kind==='sport';sync();
+    const loading=$('loading');loading.hidden=false;loading.style.display='flex';
+    let next;
+    if(kind==='sport')next=await loadPorsche();
+    else{next=genericCache.get(kind);if(!next){next=createGenericCar(kind);genericCache.set(kind,next);}}
+    if(car&&car!==next)scene.remove(car);
+    car=next;if(car.parent!==scene)scene.add(car);
+    car.userData.paint.color.set(state.color);
+    state.ready=true;loading.style.display='none';sync();setShowroomInfo(kind,meta);
+    announce(meta?`${meta.make} ${meta.model} em exibição no showroom 360°.`:'Porsche carregado. Explore o carro e abra as portas ou o porta-malas.');
+  }catch(error){console.error(error);failure('Não foi possível carregar o showroom 3D. Verifique sua conexão e o suporte a WebGL do navegador.');}
+}
+window.showroomShowCar=(kind,meta)=>{if(!renderer||!scene)return;showCar(kind==='sport'||GENERIC_TYPES.includes(kind)?kind:'sport',meta);};
 $('rotate').onclick=()=>{state.rotation=!state.rotation;sync();};
 $('doors').onclick=()=>setPart('doors',!state.doors);$('trunk').onclick=()=>setPart('trunk',!state.trunk);
 document.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>setColor(b.dataset.color));

@@ -12,3 +12,4 @@
  .seller-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:6px}.seller-actions #share-message{font-size:12px;color:var(--lime)}#search-form[hidden]{display:none}
 .card-metrics{display:flex;align-items:center;gap:8px;margin:0;font-size:12px;color:#b8c4b6;letter-spacing:.02em}.card-metrics i{color:#5a655a;font-style:normal}
 .listing-actions{display:flex;gap:18px;margin-top:12px}.listing-actions .delete-listing{margin-top:0}.edit-listing{background:none;border:0;color:#b8c4b6;font-size:12px;padding:6px 0;text-decoration:underline;text-underline-offset:3px}
+.view-360{align-self:flex-start;background:none;border:1px solid #3a453c;border-radius:3px;color:#b8c4b6;font-size:12px;padding:6px 10px;cursor:pointer;letter-spacing:.03em}.view-360:hover{border-color:#758f7b;color:#d7e2d3}

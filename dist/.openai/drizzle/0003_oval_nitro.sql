@@ -1,0 +1,1 @@
+ALTER TABLE `listings` ADD `body_type` text DEFAULT '' NOT NULL;

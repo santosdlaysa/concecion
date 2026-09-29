@@ -34,6 +34,7 @@ export const listings = sqliteTable('listings', {
   mileage: integer('mileage').notNull(),
   price: integer('price').notNull(),
   location: text('location').notNull(),
+  bodyType: text('body_type').notNull().default(''),
   image: text('image'),
   description: text('description'),
   whatsapp: text('whatsapp').notNull(),
