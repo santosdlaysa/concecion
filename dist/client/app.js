@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import {OrbitControls} from './vendor/OrbitControls.js';
 import {GLTFLoader} from './vendor/GLTFLoader.js';
+import {DRACOLoader} from './vendor/DRACOLoader.js';
+import {KTX2Loader} from './vendor/KTX2Loader.js';
 import {RoomEnvironment} from './vendor/RoomEnvironment.js';
 import {createArticulatedCar} from './rig.js';
 import {createGenericCar,GENERIC_TYPES} from './carfactory.js';
@@ -16,7 +18,7 @@ function sync(){
   if(controls)controls.autoRotate=state.rotation;
 }
 function setPart(key,open){if(!state.ready)throw new Error('O modelo ainda está carregando.');state[key]=open;state.rotation=false;sync();announce(key==='doors'?(open?'Portas abertas':'Portas fechadas'):(open?'Porta-malas dianteiro aberto':'Porta-malas fechado'));}
-function setColor(color){const button=document.querySelector(`[data-color="${color}"]`);if(!button)throw new Error('Cor inválida.');state.color=color;if(car)car.userData.paint.color.set(color);document.querySelectorAll('[data-color]').forEach(b=>{b.classList.toggle('selected',b===button);b.setAttribute('aria-pressed',String(b===button));});$('color-name').textContent=button.getAttribute('aria-label');announce('Acabamento: '+$('color-name').textContent);}
+function setColor(color){const button=document.querySelector(`[data-color="${color}"]`);if(!button)throw new Error('Cor inválida.');state.color=color;if(car?.userData.paint)car.userData.paint.color.set(color);document.querySelectorAll('[data-color]').forEach(b=>{b.classList.toggle('selected',b===button);b.setAttribute('aria-pressed',String(b===button));});$('color-name').textContent=button.getAttribute('aria-label');announce('Acabamento: '+$('color-name').textContent);}
 function initialView(){const mobile=$('scene').clientWidth<600;camera.position.set(mobile?6.4:5.9,mobile?3.3:2.8,mobile?7.7:6.8);controls.target.set(0,.52,0);controls.update();}
 function failure(message){state.ready=false;sync();$('loading').hidden=false;$('loading').style.display='flex';$('loading').replaceChildren();const p=document.createElement('p');p.textContent=message;const b=document.createElement('button');b.className='error-retry';b.textContent='Tentar novamente';b.onclick=()=>location.reload();$('loading').append(p,b);}
 async function init(){
@@ -41,26 +43,46 @@ async function init(){
     await showCar('sport');
   }catch(error){console.error(error);failure('Não foi possível carregar o showroom 3D. Verifique sua conexão e o suporte a WebGL do navegador.');}
 }
+let gltfLoader=null;
+function loader(){if(!gltfLoader){gltfLoader=new GLTFLoader();gltfLoader.setDRACOLoader(new DRACOLoader().setDecoderPath('./vendor/draco/'));gltfLoader.setKTX2Loader(new KTX2Loader().setTranscoderPath('./vendor/basis/').detectSupport(renderer));}return gltfLoader;}
+const modelProgress=progress=>{if(progress.total)$('loading-text').textContent=`Preparando o modelo 3D… ${Math.round(progress.loaded/progress.total*100)}%`;};
 let porscheCar=null;
-async function loadPorsche(){if(porscheCar)return porscheCar;const gltf=await new GLTFLoader().loadAsync('./models/porsche.glb',progress=>{if(progress.total)$('loading-text').textContent=`Preparando o modelo 3D… ${Math.round(progress.loaded/progress.total*100)}%`;});porscheCar=createArticulatedCar(gltf.scene);return porscheCar;}
+async function loadPorsche(){if(porscheCar)return porscheCar;const gltf=await loader().loadAsync('./models/porsche.glb',modelProgress);porscheCar=createArticulatedCar(gltf.scene);return porscheCar;}
+let classicCar=null;
+async function loadClassic(){
+  if(classicCar)return classicCar;
+  const gltf=await loader().loadAsync('./models/cutlass.glb',modelProgress);
+  const source=gltf.scene,doomed=[];
+  source.traverse(node=>{if(node.isMesh){if(node.material?.name==='M_Dome')doomed.push(node);else{node.castShadow=true;node.receiveShadow=true;}}});
+  doomed.forEach(node=>node.removeFromParent());
+  source.updateMatrixWorld(true);
+  const bounds=new THREE.Box3().setFromObject(source),size=bounds.getSize(new THREE.Vector3()),center=bounds.getCenter(new THREE.Vector3());
+  source.position.set(-center.x,-bounds.min.y,-center.z);
+  const wrap=new THREE.Group();wrap.add(source);wrap.scale.setScalar(5.2/size.z);wrap.rotation.y=Math.PI;
+  classicCar=new THREE.Group();classicCar.add(wrap);
+  classicCar.userData={paint:null}; // pintura de fábrica: as texturas trazem a cor original
+  return classicCar;
+}
 const genericCache=new Map();
 const showroomDefaults={brand:'PORSCHE',name:'911 Carrera 4S',tagline:'O espírito de um original.',watermark:'911',caption:'01 — PORSCHE 911 CARRERA 4S'};
-function setShowroomInfo(kind,meta){const info=meta?{brand:String(meta.make||'').toUpperCase(),name:String(meta.model||''),tagline:kind==='sport'?'Exibido no showroom como cupê esportivo.':'Modelo 3D ilustrativo do tipo de carroceria.',watermark:String(meta.model||'').split(' ')[0].toUpperCase().slice(0,6),caption:`${meta.make} ${meta.model}`.toUpperCase()}:showroomDefaults;$('showroom-brand').textContent=info.brand;$('showroom-name').textContent=info.name;$('showroom-tagline').textContent=info.tagline;$('showroom-watermark').textContent=info.watermark;$('showroom-caption').textContent=info.caption;}
+function setShowroomInfo(kind,meta){const info=meta?{brand:String(meta.make||'').toUpperCase(),name:String(meta.model||''),tagline:kind==='sport'?'Exibido no showroom como cupê esportivo.':kind==='classic'?'Modelo 3D ilustrativo: Oldsmobile Cutlass Supreme 1971, cor original de época.':'Modelo 3D ilustrativo do tipo de carroceria.',watermark:String(meta.model||'').split(' ')[0].toUpperCase().slice(0,6),caption:`${meta.make} ${meta.model}`.toUpperCase()}:showroomDefaults;$('showroom-brand').textContent=info.brand;$('showroom-name').textContent=info.name;$('showroom-tagline').textContent=info.tagline;$('showroom-watermark').textContent=info.watermark;$('showroom-caption').textContent=info.caption;}
 async function showCar(kind='sport',meta=null){
   try{
     state.doors=false;state.trunk=false;state.ready=false;state.hasParts=kind==='sport';sync();
     const loading=$('loading');loading.hidden=false;loading.style.display='flex';
     let next;
     if(kind==='sport')next=await loadPorsche();
+    else if(kind==='classic')next=await loadClassic();
     else{next=genericCache.get(kind);if(!next){next=createGenericCar(kind);genericCache.set(kind,next);}}
     if(car&&car!==next)scene.remove(car);
     car=next;if(car.parent!==scene)scene.add(car);
-    car.userData.paint.color.set(state.color);
+    if(car.userData.paint)car.userData.paint.color.set(state.color);
+    document.querySelector('.paint-panel').hidden=!car.userData.paint;
     state.ready=true;loading.style.display='none';sync();setShowroomInfo(kind,meta);
     announce(meta?`${meta.make} ${meta.model} em exibição no showroom 360°.`:'Porsche carregado. Explore o carro e abra as portas ou o porta-malas.');
   }catch(error){console.error(error);failure('Não foi possível carregar o showroom 3D. Verifique sua conexão e o suporte a WebGL do navegador.');}
 }
-window.showroomShowCar=(kind,meta)=>{if(!renderer||!scene)return;showCar(kind==='sport'||GENERIC_TYPES.includes(kind)?kind:'sport',meta);};
+window.showroomShowCar=(kind,meta)=>{if(!renderer||!scene)return;showCar(kind==='sport'||kind==='classic'||GENERIC_TYPES.includes(kind)?kind:'sport',meta);};
 $('rotate').onclick=()=>{state.rotation=!state.rotation;sync();};
 $('doors').onclick=()=>setPart('doors',!state.doors);$('trunk').onclick=()=>setPart('trunk',!state.trunk);
 document.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>setColor(b.dataset.color));

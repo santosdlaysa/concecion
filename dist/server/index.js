@@ -16,7 +16,7 @@ async function passwordHash(password, salt) {
   return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: Uint8Array.from(salt.match(/.{2}/g), (b) => parseInt(b, 16)), iterations: 1e5 }, key, 256));
 }
 var cookie = (value, maxAge) => `vertice_session=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
-var BODY_TYPES = ["", "sport", "hatch", "sedan", "suv", "pickup"];
+var BODY_TYPES = ["", "sport", "hatch", "sedan", "suv", "pickup", "classic"];
 function safeListing(row) {
   return { id: row.id, sellerId: row.sellerId, make: row.make, model: row.model, year: row.year, mileage: row.mileage, price: row.price, location: row.location, bodyType: row.bodyType || "", image: row.image, description: row.description, whatsapp: row.whatsapp, createdAt: row.createdAt };
 }
