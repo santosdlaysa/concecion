@@ -8,6 +8,13 @@
       "when": 1790690255047,
       "tag": "0000_happy_pyro",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790703334039,
+      "tag": "0001_fancy_dragon_man",
+      "breakpoints": true
     }
   ]
 }

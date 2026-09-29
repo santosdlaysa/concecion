@@ -1,5 +1,6 @@
 // worker/index.js
 var WEEK = 60 * 60 * 24 * 7;
+var ADMIN_SELLER_ID = "9b19dda2-cdda-435b-bb14-b731eb79352c";
 var utf8 = new TextEncoder();
 var json = (body2, status = 200, headers = {}) => new Response(JSON.stringify(body2), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers } });
 var normalizedEmail = (value) => String(value || "").trim().toLowerCase();
@@ -33,6 +34,8 @@ async function currentSeller(request, db) {
   if (!match) return null;
   return db.prepare("SELECT sellers.id, sellers.email, sellers.display_name AS displayName FROM sessions JOIN sellers ON sellers.id = sessions.seller_id WHERE sessions.token_hash = ? AND sessions.expires_at > ?").bind(await digest(match[1]).then(hex), Date.now()).first();
 }
+var RESET_LIFETIME = 30 * 60 * 1e3;
+var RESET_COOLDOWN = 60 * 1e3;
 function listingInput(data) {
   if (!data || typeof data !== "object") return null;
   const make = String(data.make || "").trim(), model = String(data.model || "").trim(), location = String(data.location || "").trim(), description = String(data.description || "").trim(), year = Number(data.year), mileage = Number(data.mileage), price = Number(data.price), whatsapp = String(data.whatsapp || "").replace(/\D/g, ""), image = String(data.image || "").trim();
@@ -60,7 +63,14 @@ var index_default = { async fetch(request, env) {
     try {
       if (url.pathname === "/api/session" && request.method === "GET") {
         const seller = await currentSeller(request, db);
-        return json({ seller: seller || null });
+        return json({ seller: seller ? { ...seller, isAdmin: seller.id === ADMIN_SELLER_ID } : null });
+      }
+      if (url.pathname === "/api/admin/dashboard" && request.method === "GET") {
+        const seller = await currentSeller(request, db);
+        if (!seller) return json({ error: "Entre para continuar." }, 401);
+        if (seller.id !== ADMIN_SELLER_ID) return json({ error: "Acesso restrito \xE0 administra\xE7\xE3o." }, 403);
+        const [sellerTotal, listingTotal, activeSessions, recentSellers, recentListings] = await Promise.all([db.prepare("SELECT COUNT(*) AS count FROM sellers").first(), db.prepare("SELECT COUNT(*) AS count FROM listings").first(), db.prepare("SELECT COUNT(DISTINCT seller_id) AS count FROM sessions WHERE expires_at>?").bind(Date.now()).first(), db.prepare("SELECT sellers.id,sellers.display_name AS displayName,sellers.email,sellers.created_at AS createdAt,COUNT(listings.id) AS listingCount FROM sellers LEFT JOIN listings ON listings.seller_id=sellers.id GROUP BY sellers.id ORDER BY sellers.created_at DESC LIMIT 50").all(), db.prepare("SELECT listings.id,listings.make,listings.model,listings.year,listings.price,listings.location,listings.created_at AS createdAt,sellers.display_name AS sellerName,sellers.email,sellers.id AS sellerId FROM listings JOIN sellers ON sellers.id=listings.seller_id ORDER BY listings.created_at DESC LIMIT 50").all()]);
+        return json({ totals: { sellers: sellerTotal.count, listings: listingTotal.count, activeSessions: activeSessions.count }, sellers: recentSellers.results, listings: recentListings.results });
       }
       if (url.pathname === "/api/register" && request.method === "POST") {
         const input = await body(request);
@@ -85,6 +95,44 @@ var index_default = { async fetch(request, env) {
         const token = randomToken();
         await db.prepare("INSERT INTO sessions (token_hash,seller_id,expires_at) VALUES (?,?,?)").bind(await digest(token).then(hex), account.id, Date.now() + WEEK * 1e3).run();
         return json({ seller: { id: account.id, email: account.email, displayName: account.displayName } }, 200, { "set-cookie": cookie(token, WEEK) });
+      }
+      if (url.pathname === "/api/password-reset" && request.method === "POST") {
+        if (!env.RESEND_API_KEY || !env.MAIL_FROM) return json({ error: "A recupera\xE7\xE3o por e-mail ainda n\xE3o foi configurada." }, 503);
+        const email = normalizedEmail((await body(request))?.email);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return json({ error: "Informe um e-mail v\xE1lido." }, 400);
+        const account = await db.prepare("SELECT id,email FROM sellers WHERE email=?").bind(email).first();
+        if (!account) return json({ ok: true }, 202);
+        const now = Date.now(), recent = await db.prepare("SELECT created_at AS createdAt FROM password_resets WHERE seller_id=? ORDER BY created_at DESC LIMIT 1").bind(account.id).first();
+        if (recent && now - recent.createdAt < RESET_COOLDOWN) return json({ ok: true }, 202);
+        const token = randomToken(), tokenHash = await digest(token).then(hex), id = crypto.randomUUID();
+        await db.prepare("DELETE FROM password_resets WHERE seller_id=?").bind(account.id).run();
+        await db.prepare("INSERT INTO password_resets(id,seller_id,token_hash,created_at,expires_at) VALUES(?,?,?,?,?)").bind(id, account.id, tokenHash, now, now + RESET_LIFETIME).run();
+        const resetUrl = new URL("/", request.url);
+        resetUrl.hash = new URLSearchParams({ token }).toString();
+        let sent;
+        try {
+          sent = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" }, body: JSON.stringify({ from: env.MAIL_FROM, to: [account.email], subject: "Redefina a senha da V\xE9rtice Motors", text: `Recebemos um pedido para redefinir a senha da sua conta V\xE9rtice Motors. Acesse este link em at\xE9 30 minutos: ${resetUrl.href}
+
+Se voc\xEA n\xE3o pediu a redefini\xE7\xE3o, ignore este e-mail.`, html: `<p>Recebemos um pedido para redefinir a senha da sua conta V\xE9rtice Motors.</p><p><a href="${resetUrl.href}">Criar uma nova senha</a></p><p>O link expira em 30 minutos. Se voc\xEA n\xE3o pediu a redefini\xE7\xE3o, ignore este e-mail.</p>` }) });
+        } catch {
+          await db.prepare("DELETE FROM password_resets WHERE id=?").bind(id).run();
+          return json({ error: "N\xE3o foi poss\xEDvel enviar o e-mail agora. Tente novamente." }, 502);
+        }
+        if (!sent.ok) {
+          console.error("Password reset email provider returned status", sent.status);
+          await db.prepare("DELETE FROM password_resets WHERE id=?").bind(id).run();
+          return json({ error: "N\xE3o foi poss\xEDvel enviar o e-mail agora. Tente novamente." }, 502);
+        }
+        return json({ ok: true }, 202);
+      }
+      if (url.pathname === "/api/password-reset/complete" && request.method === "POST") {
+        const input = await body(request), token = String(input?.token || ""), password = String(input?.password || "");
+        if (!/^[\w-]{30,100}$/.test(token) || password.length < 12 || password.length > 128) return json({ error: "O link \xE9 inv\xE1lido ou expirou. Solicite uma nova redefini\xE7\xE3o." }, 400);
+        const reset = await db.prepare("SELECT id,seller_id AS sellerId FROM password_resets WHERE token_hash=? AND expires_at>?").bind(await digest(token).then(hex), Date.now()).first();
+        if (!reset) return json({ error: "O link \xE9 inv\xE1lido ou expirou. Solicite uma nova redefini\xE7\xE3o." }, 400);
+        const salt = hex(crypto.getRandomValues(new Uint8Array(16))), hash = await passwordHash(password, salt);
+        await db.batch([db.prepare("UPDATE sellers SET password_hash=?,password_salt=? WHERE id=?").bind(hash, salt, reset.sellerId), db.prepare("DELETE FROM sessions WHERE seller_id=?").bind(reset.sellerId), db.prepare("DELETE FROM password_resets WHERE seller_id=?").bind(reset.sellerId)]);
+        return json({ ok: true });
       }
       if (url.pathname === "/api/logout" && request.method === "POST") {
         const seller = await currentSeller(request, db);

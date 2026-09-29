@@ -15,6 +15,14 @@ export const sessions = sqliteTable('sessions', {
   expiresAt: integer('expires_at').notNull(),
 }, (table) => [index('idx_sessions_seller').on(table.sellerId)]);
 
+export const passwordResets = sqliteTable('password_resets', {
+  id: text('id').primaryKey(),
+  sellerId: text('seller_id').notNull().references(() => sellers.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull().unique(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+}, (table) => [index('idx_password_resets_seller').on(table.sellerId)]);
+
 export const listings = sqliteTable('listings', {
   id: text('id').primaryKey(),
   sellerId: text('seller_id').notNull().references(() => sellers.id, { onDelete: 'cascade' }),
