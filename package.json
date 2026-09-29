@@ -1,0 +1,1 @@
+{"name":"vertice-motors","private":true,"type":"module","scripts":{"dev":"node server.mjs","check":"node --check dist/app.js"},"dependencies":{"three":"0.180.0"},"devDependencies":{"@gltf-transform/core":"^4.5.1","@gltf-transform/extensions":"^4.5.1","draco3dgltf":"^1.5.7"}}
