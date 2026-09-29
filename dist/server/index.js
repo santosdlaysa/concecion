@@ -72,6 +72,18 @@ var index_default = { async fetch(request, env) {
         const [sellerTotal, listingTotal, activeSessions, recentSellers, recentListings] = await Promise.all([db.prepare("SELECT COUNT(*) AS count FROM sellers").first(), db.prepare("SELECT COUNT(*) AS count FROM listings").first(), db.prepare("SELECT COUNT(DISTINCT seller_id) AS count FROM sessions WHERE expires_at>?").bind(Date.now()).first(), db.prepare("SELECT sellers.id,sellers.display_name AS displayName,sellers.email,sellers.created_at AS createdAt,COUNT(listings.id) AS listingCount FROM sellers LEFT JOIN listings ON listings.seller_id=sellers.id GROUP BY sellers.id ORDER BY sellers.created_at DESC LIMIT 50").all(), db.prepare("SELECT listings.id,listings.make,listings.model,listings.year,listings.price,listings.location,listings.created_at AS createdAt,sellers.display_name AS sellerName,sellers.email,sellers.id AS sellerId FROM listings JOIN sellers ON sellers.id=listings.seller_id ORDER BY listings.created_at DESC LIMIT 50").all()]);
         return json({ totals: { sellers: sellerTotal.count, listings: listingTotal.count, activeSessions: activeSessions.count }, sellers: recentSellers.results, listings: recentListings.results });
       }
+      if (url.pathname === "/api/admin/password" && request.method === "POST") {
+        const seller = await currentSeller(request, db);
+        if (!seller) return json({ error: "Entre para continuar." }, 401);
+        if (seller.id !== ADMIN_SELLER_ID) return json({ error: "Acesso restrito \xE0 administra\xE7\xE3o." }, 403);
+        const input = await body(request), currentPassword = String(input?.currentPassword || ""), newPassword = String(input?.newPassword || "");
+        if (currentPassword.length > 128 || newPassword.length < 12 || newPassword.length > 128) return json({ error: "A nova senha deve ter entre 12 e 128 caracteres." }, 400);
+        const account = await db.prepare("SELECT password_hash AS passwordHash,password_salt AS passwordSalt FROM sellers WHERE id=?").bind(seller.id).first();
+        if (await passwordHash(currentPassword, account.passwordSalt) !== account.passwordHash) return json({ error: "A senha atual est\xE1 incorreta." }, 401);
+        const salt = hex(crypto.getRandomValues(new Uint8Array(16))), hash = await passwordHash(newPassword, salt), token = randomToken(), tokenHash = await digest(token).then(hex), now = Date.now();
+        await db.batch([db.prepare("UPDATE sellers SET password_hash=?,password_salt=? WHERE id=?").bind(hash, salt, seller.id), db.prepare("DELETE FROM sessions WHERE seller_id=?").bind(seller.id), db.prepare("INSERT INTO sessions(token_hash,seller_id,expires_at) VALUES(?,?,?)").bind(tokenHash, seller.id, now + WEEK * 1e3)]);
+        return json({ ok: true }, 200, { "set-cookie": cookie(token, WEEK) });
+      }
       if (url.pathname === "/api/register" && request.method === "POST") {
         const input = await body(request);
         const email = normalizedEmail(input?.email), password = String(input?.password || ""), name = String(input?.name || "").trim();
