@@ -72,8 +72,17 @@ async function loadCatalogModel(kind){
   return car;
 }
 const genericCache=new Map();
-const showroomDefaults={brand:'PORSCHE',name:'911 Carrera 4S',tagline:'O espírito de um original.',watermark:'911',caption:'01 — PORSCHE 911 CARRERA 4S'};
-function setShowroomInfo(kind,meta){const info=meta?{brand:String(meta.make||'').toUpperCase(),name:String(meta.model||''),tagline:kind==='sport'?'Exibido no showroom como cupê esportivo.':kind==='classic'?'Modelo 3D ilustrativo: Oldsmobile Cutlass Supreme 1971, cor original de época.':kind==='golf'?'Modelo 3D ilustrativo: Volkswagen Golf (low poly), cores do artista.':kind==='hilux'?'Modelo 3D ilustrativo: Toyota Hilux (low poly), cores do artista.':'Modelo 3D ilustrativo do tipo de carroceria.',watermark:String(meta.model||'').split(' ')[0].toUpperCase().slice(0,6),caption:`${meta.make} ${meta.model}`.toUpperCase()}:showroomDefaults;$('showroom-brand').textContent=info.brand;$('showroom-name').textContent=info.name;$('showroom-tagline').textContent=info.tagline;$('showroom-watermark').textContent=info.watermark;$('showroom-caption').textContent=info.caption;}
+const KIND_INFO={
+  sport:{brand:'PORSCHE',name:'911 Carrera 4S',tagline:'O espírito de um original.',listingTagline:'Modelo 3D ilustrativo: Porsche 911 Carrera 4S.',watermark:'911',caption:'01 — PORSCHE 911 CARRERA 4S'},
+  classic:{brand:'OLDSMOBILE',name:'Cutlass Supreme 1971',tagline:'Um clássico de 1971 na cor original de época.',listingTagline:'Modelo 3D ilustrativo: Oldsmobile Cutlass Supreme 1971.',watermark:'71',caption:'02 — OLDSMOBILE CUTLASS SUPREME'},
+  golf:{brand:'VOLKSWAGEN',name:'Golf',tagline:'Modelo low poly com as cores do artista.',listingTagline:'Modelo 3D ilustrativo: Volkswagen Golf (low poly).',watermark:'GOLF',caption:'03 — VOLKSWAGEN GOLF'},
+  hilux:{brand:'TOYOTA',name:'Hilux',tagline:'Modelo low poly com as cores do artista.',listingTagline:'Modelo 3D ilustrativo: Toyota Hilux (low poly).',watermark:'HILUX',caption:'04 — TOYOTA HILUX'},
+  hatch:{brand:'VÉRTICE',name:'Hatch',tagline:'Modelo ilustrativo do tipo de carroceria.',listingTagline:'Modelo 3D ilustrativo do tipo de carroceria.',watermark:'HATCH',caption:'05 — TIPO HATCH'},
+  sedan:{brand:'VÉRTICE',name:'Sedã',tagline:'Modelo ilustrativo do tipo de carroceria.',listingTagline:'Modelo 3D ilustrativo do tipo de carroceria.',watermark:'SEDÃ',caption:'06 — TIPO SEDÃ'},
+  suv:{brand:'VÉRTICE',name:'SUV',tagline:'Modelo ilustrativo do tipo de carroceria.',listingTagline:'Modelo 3D ilustrativo do tipo de carroceria.',watermark:'SUV',caption:'07 — TIPO SUV'},
+  pickup:{brand:'VÉRTICE',name:'Picape',tagline:'Modelo ilustrativo do tipo de carroceria.',listingTagline:'Modelo 3D ilustrativo do tipo de carroceria.',watermark:'PICAPE',caption:'08 — TIPO PICAPE'},
+};
+function setShowroomInfo(kind,meta){const base=KIND_INFO[kind]||KIND_INFO.sport;const info=meta?{brand:String(meta.make||'').toUpperCase(),name:String(meta.model||''),tagline:base.listingTagline,watermark:String(meta.model||'').split(' ')[0].toUpperCase().slice(0,6),caption:`${meta.make} ${meta.model}`.toUpperCase()}:base;$('showroom-brand').textContent=info.brand;$('showroom-name').textContent=info.name;$('showroom-tagline').textContent=info.tagline;$('showroom-watermark').textContent=info.watermark;$('showroom-caption').textContent=info.caption;document.querySelectorAll('.model-picker [data-model]').forEach(b=>{const on=b.dataset.model===kind;b.classList.toggle('selected',on);b.setAttribute('aria-pressed',String(on));});}
 async function showCar(kind='sport',meta=null){
   try{
     state.doors=false;state.trunk=false;state.ready=false;state.hasParts=kind==='sport';sync();
@@ -91,6 +100,7 @@ async function showCar(kind='sport',meta=null){
   }catch(error){console.error(error);failure('Não foi possível carregar o showroom 3D. Verifique sua conexão e o suporte a WebGL do navegador.');}
 }
 window.showroomShowCar=(kind,meta)=>{if(!renderer||!scene)return;showCar(kind==='sport'||MODEL_CATALOG[kind]||GENERIC_TYPES.includes(kind)?kind:'sport',meta);};
+document.querySelectorAll('.model-picker [data-model]').forEach(b=>b.addEventListener('click',()=>{if(scene)showCar(b.dataset.model);}));
 $('rotate').onclick=()=>{state.rotation=!state.rotation;sync();};
 $('doors').onclick=()=>setPart('doors',!state.doors);$('trunk').onclick=()=>setPart('trunk',!state.trunk);
 document.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>setColor(b.dataset.color));
