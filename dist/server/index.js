@@ -1,0 +1,164 @@
+// worker/index.js
+var WEEK = 60 * 60 * 24 * 7;
+var utf8 = new TextEncoder();
+var json = (body2, status = 200, headers = {}) => new Response(JSON.stringify(body2), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers } });
+var normalizedEmail = (value) => String(value || "").trim().toLowerCase();
+var digest = async (value) => new Uint8Array(await crypto.subtle.digest("SHA-256", typeof value === "string" ? utf8.encode(value) : value));
+var hex = (bytes) => [...new Uint8Array(bytes)].map((v) => v.toString(16).padStart(2, "0")).join("");
+var randomToken = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+};
+async function passwordHash(password, salt) {
+  const key = await crypto.subtle.importKey("raw", utf8.encode(password.normalize("NFKC")), "PBKDF2", false, ["deriveBits"]);
+  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: Uint8Array.from(salt.match(/.{2}/g), (b) => parseInt(b, 16)), iterations: 31e4 }, key, 256));
+}
+var cookie = (value, maxAge) => `vertice_session=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+function safeListing(row) {
+  return { id: row.id, sellerId: row.sellerId, make: row.make, model: row.model, year: row.year, mileage: row.mileage, price: row.price, location: row.location, image: row.image, description: row.description, whatsapp: row.whatsapp, createdAt: row.createdAt };
+}
+async function body(request) {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
+function validOrigin(request) {
+  const origin = request.headers.get("origin");
+  return !origin || origin === new URL(request.url).origin;
+}
+async function currentSeller(request, db) {
+  const match = request.headers.get("cookie")?.match(/(?:^|;\s*)vertice_session=([\w-]{30,100})/);
+  if (!match) return null;
+  return db.prepare("SELECT sellers.id, sellers.email, sellers.display_name AS displayName FROM sessions JOIN sellers ON sellers.id = sessions.seller_id WHERE sessions.token_hash = ? AND sessions.expires_at > ?").bind(await digest(match[1]).then(hex), Date.now()).first();
+}
+function listingInput(data) {
+  if (!data || typeof data !== "object") return null;
+  const make = String(data.make || "").trim(), model = String(data.model || "").trim(), location = String(data.location || "").trim(), description = String(data.description || "").trim(), year = Number(data.year), mileage = Number(data.mileage), price = Number(data.price), whatsapp = String(data.whatsapp || "").replace(/\D/g, ""), image = String(data.image || "").trim();
+  if (make.length < 2 || make.length > 40 || model.length < 1 || model.length > 80 || location.length < 3 || location.length > 80 || !Number.isInteger(year) || year < 1950 || year > (/* @__PURE__ */ new Date()).getFullYear() + 1 || !Number.isInteger(mileage) || mileage < 0 || mileage > 2e6 || !Number.isSafeInteger(price) || price < 100 || price > 9999999999 || !/^[1-9][0-9]{11,12}$/.test(whatsapp) || description.length > 800 || image && !/^cars\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/.test(image)) return null;
+  return { make, model, location, description, year, mileage, price, whatsapp, image: image || null };
+}
+var index_default = { async fetch(request, env) {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/media/")) {
+    const key = decodeURIComponent(url.pathname.slice(7));
+    if (!/^cars\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/.test(key) || !env.BUCKET) return new Response("Imagem n\xE3o encontrada.", { status: 404 });
+    const image = await env.BUCKET.get(key);
+    if (!image) return new Response("Imagem n\xE3o encontrada.", { status: 404 });
+    const headers = new Headers();
+    image.writeHttpMetadata(headers);
+    headers.set("cache-control", "public, max-age=3600");
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("content-security-policy", "default-src 'none'; sandbox");
+    return new Response(image.body, { headers });
+  }
+  if (url.pathname.startsWith("/api/")) {
+    if (!env.DB) return json({ error: "O estoque estar\xE1 dispon\xEDvel em instantes." }, 503);
+    const db = env.DB;
+    if (!validOrigin(request) && request.method !== "GET") return json({ error: "Origem inv\xE1lida." }, 403);
+    try {
+      if (url.pathname === "/api/session" && request.method === "GET") {
+        const seller = await currentSeller(request, db);
+        return json({ seller: seller || null });
+      }
+      if (url.pathname === "/api/register" && request.method === "POST") {
+        const input = await body(request);
+        const email = normalizedEmail(input?.email), password = String(input?.password || ""), name = String(input?.name || "").trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || password.length < 12 || password.length > 128 || name.length < 2 || name.length > 60) return json({ error: "Informe seu nome, um e-mail v\xE1lido e uma senha com ao menos 12 caracteres." }, 400);
+        const id = crypto.randomUUID(), salt = hex(crypto.getRandomValues(new Uint8Array(16))), hash = await passwordHash(password, salt), token = randomToken();
+        try {
+          await db.prepare("INSERT INTO sellers (id,email,display_name,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?)").bind(id, email, name, hash, salt, Date.now()).run();
+          await db.prepare("INSERT INTO sessions (token_hash,seller_id,expires_at) VALUES (?,?,?)").bind(await digest(token).then(hex), id, Date.now() + WEEK * 1e3).run();
+        } catch (error) {
+          if (String(error).includes("UNIQUE")) return json({ error: "J\xE1 existe uma conta com esse e-mail." }, 409);
+          throw error;
+        }
+        return json({ seller: { id, email, displayName: name } }, 201, { "set-cookie": cookie(token, WEEK) });
+      }
+      if (url.pathname === "/api/login" && request.method === "POST") {
+        const input = await body(request), email = normalizedEmail(input?.email), password = String(input?.password || "");
+        if (email.length > 254 || password.length > 128) return json({ error: "E-mail ou senha incorretos." }, 401);
+        const account = await db.prepare("SELECT id,email,display_name AS displayName,password_hash AS passwordHash,password_salt AS passwordSalt FROM sellers WHERE email=?").bind(email).first();
+        const candidate = await passwordHash(password, account?.passwordSalt || "00000000000000000000000000000000");
+        if (!account || candidate !== account.passwordHash) return json({ error: "E-mail ou senha incorretos." }, 401);
+        const token = randomToken();
+        await db.prepare("INSERT INTO sessions (token_hash,seller_id,expires_at) VALUES (?,?,?)").bind(await digest(token).then(hex), account.id, Date.now() + WEEK * 1e3).run();
+        return json({ seller: { id: account.id, email: account.email, displayName: account.displayName } }, 200, { "set-cookie": cookie(token, WEEK) });
+      }
+      if (url.pathname === "/api/logout" && request.method === "POST") {
+        const seller = await currentSeller(request, db);
+        if (seller) await db.prepare("DELETE FROM sessions WHERE seller_id=?").bind(seller.id).run();
+        return json({ seller: null }, 200, { "set-cookie": cookie("", 0) });
+      }
+      if (url.pathname === "/api/images" && request.method === "POST") {
+        const seller = await currentSeller(request, db);
+        if (!seller) return json({ error: "Entre na sua conta para enviar fotos." }, 401);
+        if (!env.BUCKET) return json({ error: "O envio de fotos ainda n\xE3o est\xE1 dispon\xEDvel." }, 503);
+        if (Number(request.headers.get("content-length") || 0) > 42e5) return json({ error: "A foto deve ter at\xE9 4 MB." }, 413);
+        const data = await request.formData(), file = data.get("file");
+        if (!(file instanceof File) || file.size < 16 || file.size > 4 * 1024 * 1024) return json({ error: "Escolha uma foto com at\xE9 4 MB." }, 400);
+        const bytes = new Uint8Array(await file.arrayBuffer()), mime = file.type;
+        let valid = false, extension = "";
+        if (mime === "image/jpeg") {
+          valid = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+          extension = "jpg";
+        } else if (mime === "image/png") {
+          valid = bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71;
+          extension = "png";
+        } else if (mime === "image/webp") {
+          valid = String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP";
+          extension = "webp";
+        }
+        if (!valid) return json({ error: "Envie uma foto JPEG, PNG ou WebP v\xE1lida." }, 415);
+        const key = `cars/${seller.id}/${crypto.randomUUID()}.${extension}`;
+        await env.BUCKET.put(key, bytes, { httpMetadata: { contentType: mime, cacheControl: "public, max-age=3600" } });
+        return json({ key }, 201);
+      }
+      if (url.pathname === "/api/listings" && request.method === "GET") {
+        if (url.searchParams.get("mine") === "1") {
+          const seller = await currentSeller(request, db);
+          if (!seller) return json({ error: "Entre na sua conta." }, 401);
+          const rows2 = await db.prepare("SELECT id,seller_id AS sellerId,make,model,year,mileage,price,location,image,description,whatsapp,created_at AS createdAt FROM listings WHERE seller_id=? ORDER BY created_at DESC").bind(seller.id).all();
+          return json({ listings: rows2.results.map(safeListing) });
+        }
+        const rows = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,sellers.display_name AS sellerName FROM listings JOIN sellers ON sellers.id=listings.seller_id ORDER BY listings.created_at DESC LIMIT 100").all();
+        return json({ listings: rows.results });
+      }
+      if (url.pathname === "/api/listings" && request.method === "POST") {
+        const seller = await currentSeller(request, db);
+        if (!seller) return json({ error: "Entre na sua conta para publicar um ve\xEDculo." }, 401);
+        const input = listingInput(await body(request));
+        if (!input) return json({ error: "Confira as informa\xE7\xF5es. Use WhatsApp com c\xF3digo do pa\xEDs e DDD (55 + DDD + n\xFAmero)." }, 400);
+        const id = crypto.randomUUID(), createdAt = Date.now();
+        await db.prepare("INSERT INTO listings(id,seller_id,make,model,year,mileage,price,location,image,description,whatsapp,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").bind(id, seller.id, input.make, input.model, input.year, input.mileage, input.price, input.location, input.image, input.description, input.whatsapp, createdAt).run();
+        return json({ listing: { id, ...input, sellerId: seller.id, createdAt, sellerName: seller.displayName } }, 201);
+      }
+      const listingMatch = url.pathname.match(/^\/api\/listings\/([\w-]+)$/);
+      if (listingMatch && (request.method === "DELETE" || request.method === "PATCH")) {
+        const seller = await currentSeller(request, db);
+        if (!seller) return json({ error: "Entre na sua conta." }, 401);
+        if (request.method === "DELETE") {
+          const prior2 = await db.prepare("SELECT image FROM listings WHERE id=? AND seller_id=?").bind(listingMatch[1], seller.id).first();
+          const result2 = await db.prepare("DELETE FROM listings WHERE id=? AND seller_id=?").bind(listingMatch[1], seller.id).run();
+          if (result2.meta.changes && prior2?.image) await env.BUCKET?.delete(prior2.image);
+          return result2.meta.changes ? json({ ok: true }) : json({ error: "O an\xFAncio n\xE3o foi encontrado." }, 404);
+        }
+        const input = listingInput(await body(request));
+        if (!input) return json({ error: "Confira os dados do an\xFAncio." }, 400);
+        const prior = await db.prepare("SELECT image FROM listings WHERE id=? AND seller_id=?").bind(listingMatch[1], seller.id).first();
+        const result = await db.prepare("UPDATE listings SET make=?,model=?,year=?,mileage=?,price=?,location=?,image=?,description=?,whatsapp=? WHERE id=? AND seller_id=?").bind(input.make, input.model, input.year, input.mileage, input.price, input.location, input.image, input.description, input.whatsapp, listingMatch[1], seller.id).run();
+        if (result.meta.changes && prior?.image && prior.image !== input.image) await env.BUCKET?.delete(prior.image);
+        return result.meta.changes ? json({ ok: true }) : json({ error: "O an\xFAncio n\xE3o foi encontrado." }, 404);
+      }
+      return json({ error: "Rota n\xE3o encontrada." }, 404);
+    } catch (error) {
+      console.error("Marketplace request failed", error);
+      return json({ error: "N\xE3o foi poss\xEDvel concluir agora. Tente novamente." }, 500);
+    }
+  }
+  return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Site indispon\xEDvel.", { status: 503 });
+} };
+export {
+  index_default as default
+};
