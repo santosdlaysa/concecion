@@ -5,7 +5,7 @@ const normalizedEmail=value=>String(value||'').trim().toLowerCase();
 const digest=async value=>new Uint8Array(await crypto.subtle.digest('SHA-256',typeof value==='string'?utf8.encode(value):value));
 const hex=bytes=>[...new Uint8Array(bytes)].map(v=>v.toString(16).padStart(2,'0')).join('');
 const randomToken=()=>{const bytes=crypto.getRandomValues(new Uint8Array(32));return btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');};
-async function passwordHash(password,salt){const key=await crypto.subtle.importKey('raw',utf8.encode(password.normalize('NFKC')),'PBKDF2',false,['deriveBits']);return hex(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:Uint8Array.from(salt.match(/.{2}/g),b=>parseInt(b,16)),iterations:310000},key,256));}
+async function passwordHash(password,salt){const key=await crypto.subtle.importKey('raw',utf8.encode(password.normalize('NFKC')),'PBKDF2',false,['deriveBits']);return hex(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:Uint8Array.from(salt.match(/.{2}/g),b=>parseInt(b,16)),iterations:100000},key,256));}
 const cookie=(value,maxAge)=>`vertice_session=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
 function safeListing(row){return {id:row.id,sellerId:row.sellerId,make:row.make,model:row.model,year:row.year,mileage:row.mileage,price:row.price,location:row.location,image:row.image,description:row.description,whatsapp:row.whatsapp,createdAt:row.createdAt};}
 async function body(request){try{return await request.json();}catch{return null;}}

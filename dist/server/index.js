@@ -11,7 +11,7 @@ var randomToken = () => {
 };
 async function passwordHash(password, salt) {
   const key = await crypto.subtle.importKey("raw", utf8.encode(password.normalize("NFKC")), "PBKDF2", false, ["deriveBits"]);
-  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: Uint8Array.from(salt.match(/.{2}/g), (b) => parseInt(b, 16)), iterations: 31e4 }, key, 256));
+  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: Uint8Array.from(salt.match(/.{2}/g), (b) => parseInt(b, 16)), iterations: 1e5 }, key, 256));
 }
 var cookie = (value, maxAge) => `vertice_session=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
 function safeListing(row) {
