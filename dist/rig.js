@@ -35,7 +35,7 @@ export function createArticulatedCar(source){
   source.getObjectByName('Plane')?.removeFromParent();
   const oldCoat=[];source.traverse(object=>{if(object.isMesh&&object.material.name==='coat')oldCoat.push(object);});oldCoat.forEach(object=>object.removeFromParent());
   source.updateMatrixWorld(true);
-  const bounds=new THREE.Box3().setFromObject(source),size=bounds.getSize(new THREE.Vector3()),center=bounds.getCenter(new THREE.Vector3());
+  const bounds=new THREE.Box3().setFromObject(source,true),size=bounds.getSize(new THREE.Vector3()),center=bounds.getCenter(new THREE.Vector3());
   const scale=4.6/size.z;
   const normalization=new THREE.Matrix4().makeScale(scale,scale,scale).multiply(new THREE.Matrix4().makeTranslation(-center.x,-bounds.min.y,-center.z));
   const car=new THREE.Group(),body=new THREE.Group(),left=new THREE.Group(),right=new THREE.Group(),trunk=new THREE.Group();
@@ -71,3 +71,4 @@ export function createArticulatedCar(source){
   car.userData={left,right,trunk,paint};
   return car;
 }
+
