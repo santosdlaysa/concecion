@@ -7,11 +7,12 @@ const mime={'.html':'text/html; charset=utf-8','.css':'text/css','.js':'text/jav
 // Local and Vercel previews use the published marketplace's accounts and data.
 const apiOrigin='https://vertice-motors.laysadiniz.chatgpt.site';
 const hosted=process.env.VERCEL==='1';
+const productionHosts=new Set(['concecion.vercel.app']);
 const localOrigins=new Set(['http://localhost:4173','http://127.0.0.1:4173']);
 function requestOrigin(req){
   const host=req.headers.host;
   if(typeof host!=='string'||!/^[a-z0-9.-]+(?::\d+)?$/i.test(host))return null;
-  if(hosted)return `https://${host.toLowerCase()}`;
+  if(hosted||productionHosts.has(host.toLowerCase()))return `https://${host.toLowerCase()}`;
   const origin=`http://${host.toLowerCase()}`;
   return localOrigins.has(origin)?origin:null;
 }
@@ -27,7 +28,7 @@ function proxyMarketplace(req,res){
   const upstream=https.request(target,{method:req.method,headers},response=>{
     const outgoing={...response.headers};
     // Only local HTTP drops Secure; Vercel keeps HTTPS session protection.
-    if(!hosted&&outgoing['set-cookie'])outgoing['set-cookie']=outgoing['set-cookie'].map(value=>value.replace(/;\s*Secure\b/gi,''));
+    if(requestOrigin(req)?.startsWith('http://')&&outgoing['set-cookie'])outgoing['set-cookie']=outgoing['set-cookie'].map(value=>value.replace(/;\s*Secure\b/gi,''));
     res.writeHead(response.statusCode,outgoing);
     response.pipe(res);
   });
