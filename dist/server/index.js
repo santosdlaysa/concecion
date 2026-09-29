@@ -4,6 +4,7 @@ var ADMIN_SELLER_ID = "9b19dda2-cdda-435b-bb14-b731eb79352c";
 var utf8 = new TextEncoder();
 var json = (body2, status = 200, headers = {}) => new Response(JSON.stringify(body2), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers } });
 var normalizedEmail = (value) => String(value || "").trim().toLowerCase();
+var makeStoreSlug = (name, id) => `${String(name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 44) || "loja"}-${id.slice(0, 6)}`;
 var digest = async (value) => new Uint8Array(await crypto.subtle.digest("SHA-256", typeof value === "string" ? utf8.encode(value) : value));
 var hex = (bytes) => [...new Uint8Array(bytes)].map((v) => v.toString(16).padStart(2, "0")).join("");
 var randomToken = () => {
@@ -32,7 +33,7 @@ function validOrigin(request) {
 async function currentSeller(request, db) {
   const match = request.headers.get("cookie")?.match(/(?:^|;\s*)vertice_session=([\w-]{30,100})/);
   if (!match) return null;
-  return db.prepare("SELECT sellers.id, sellers.email, sellers.display_name AS displayName FROM sessions JOIN sellers ON sellers.id = sessions.seller_id WHERE sessions.token_hash = ? AND sessions.expires_at > ?").bind(await digest(match[1]).then(hex), Date.now()).first();
+  return db.prepare("SELECT sellers.id, sellers.email, sellers.display_name AS displayName, sellers.store_slug AS storeSlug, sellers.plan FROM sessions JOIN sellers ON sellers.id = sessions.seller_id WHERE sessions.token_hash = ? AND sessions.expires_at > ?").bind(await digest(match[1]).then(hex), Date.now()).first();
 }
 var RESET_LIFETIME = 30 * 60 * 1e3;
 var RESET_COOLDOWN = 60 * 1e3;
@@ -62,8 +63,38 @@ var index_default = { async fetch(request, env) {
     if (!validOrigin(request) && request.method !== "GET") return json({ error: "Origem inv\xE1lida." }, 403);
     try {
       if (url.pathname === "/api/session" && request.method === "GET") {
-        const seller = await currentSeller(request, db);
+        let seller = await currentSeller(request, db);
+        if (seller && !seller.storeSlug) {
+          seller.storeSlug = makeStoreSlug(seller.displayName, seller.id);
+          await db.prepare("UPDATE sellers SET store_slug=? WHERE id=? AND store_slug=''").bind(seller.storeSlug, seller.id).run();
+        }
         return json({ seller: seller ? { ...seller, isAdmin: seller.id === ADMIN_SELLER_ID } : null });
+      }
+      if (url.pathname === "/api/store" && request.method === "GET") {
+        let seller = await currentSeller(request, db);
+        if (!seller) return json({ error: "Entre na sua conta." }, 401);
+        if (!seller.storeSlug) {
+          seller.storeSlug = makeStoreSlug(seller.displayName, seller.id);
+          await db.prepare("UPDATE sellers SET store_slug=? WHERE id=? AND store_slug=''").bind(seller.storeSlug, seller.id).run();
+        }
+        return json({ storeSlug: seller.storeSlug, displayName: seller.displayName, plan: seller.plan || "free" });
+      }
+      const storeMatch = url.pathname.match(/^\/api\/stores\/([a-z0-9-]{3,60})$/);
+      if (storeMatch && request.method === "GET") {
+        const store = await db.prepare("SELECT id,display_name AS displayName,store_slug AS storeSlug FROM sellers WHERE store_slug=?").bind(storeMatch[1]).first();
+        if (!store) return json({ error: "Esta loja n\xE3o foi encontrada." }, 404);
+        const rows = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,sellers.display_name AS sellerName FROM listings JOIN sellers ON sellers.id=listings.seller_id WHERE sellers.id=? ORDER BY listings.created_at DESC LIMIT 100").bind(store.id).all();
+        return json({ store, listings: rows.results });
+      }
+      if (url.pathname === "/api/metrics" && request.method === "POST") {
+        const input = await body(request), listingId = String(input?.listingId || ""), event = input?.event;
+        if (!/^[\w-]{36}$/.test(listingId) || !["view", "whatsapp"].includes(event)) return json({ error: "M\xE9trica inv\xE1lida." }, 400);
+        const listing = await db.prepare("SELECT seller_id AS sellerId FROM listings WHERE id=?").bind(listingId).first();
+        if (!listing) return json({ error: "An\xFAncio n\xE3o encontrado." }, 404);
+        const viewer = await currentSeller(request, db);
+        if (viewer?.id === listing.sellerId) return json({ ok: true, ignored: true });
+        await db.prepare("INSERT INTO listing_metrics(listing_id,views,whatsapp_clicks,updated_at) VALUES(?,?,?,?) ON CONFLICT(listing_id) DO UPDATE SET views=views+excluded.views,whatsapp_clicks=whatsapp_clicks+excluded.whatsapp_clicks,updated_at=excluded.updated_at").bind(listingId, event === "view" ? 1 : 0, event === "whatsapp" ? 1 : 0, Date.now()).run();
+        return json({ ok: true }, 202);
       }
       if (url.pathname === "/api/admin/dashboard" && request.method === "GET") {
         const seller = await currentSeller(request, db);
@@ -88,25 +119,25 @@ var index_default = { async fetch(request, env) {
         const input = await body(request);
         const email = normalizedEmail(input?.email), password = String(input?.password || ""), name = String(input?.name || "").trim();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || password.length < 12 || password.length > 128 || name.length < 2 || name.length > 60) return json({ error: "Informe seu nome, um e-mail v\xE1lido e uma senha com ao menos 12 caracteres." }, 400);
-        const id = crypto.randomUUID(), salt = hex(crypto.getRandomValues(new Uint8Array(16))), hash = await passwordHash(password, salt), token = randomToken();
+        const id = crypto.randomUUID(), storeSlug = makeStoreSlug(name, id), salt = hex(crypto.getRandomValues(new Uint8Array(16))), hash = await passwordHash(password, salt), token = randomToken();
         try {
-          await db.prepare("INSERT INTO sellers (id,email,display_name,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?)").bind(id, email, name, hash, salt, Date.now()).run();
+          await db.prepare("INSERT INTO sellers (id,email,display_name,store_slug,plan,password_hash,password_salt,created_at) VALUES (?,?,?,?,?,?,?,?)").bind(id, email, name, storeSlug, "free", hash, salt, Date.now()).run();
           await db.prepare("INSERT INTO sessions (token_hash,seller_id,expires_at) VALUES (?,?,?)").bind(await digest(token).then(hex), id, Date.now() + WEEK * 1e3).run();
         } catch (error) {
           if (String(error).includes("UNIQUE")) return json({ error: "J\xE1 existe uma conta com esse e-mail." }, 409);
           throw error;
         }
-        return json({ seller: { id, email, displayName: name } }, 201, { "set-cookie": cookie(token, WEEK) });
+        return json({ seller: { id, email, displayName: name, storeSlug, plan: "free" }, isAdmin: id === ADMIN_SELLER_ID }, 201, { "set-cookie": cookie(token, WEEK) });
       }
       if (url.pathname === "/api/login" && request.method === "POST") {
         const input = await body(request), email = normalizedEmail(input?.email), password = String(input?.password || "");
         if (email.length > 254 || password.length > 128) return json({ error: "E-mail ou senha incorretos." }, 401);
-        const account = await db.prepare("SELECT id,email,display_name AS displayName,password_hash AS passwordHash,password_salt AS passwordSalt FROM sellers WHERE email=?").bind(email).first();
+        const account = await db.prepare("SELECT id,email,display_name AS displayName,store_slug AS storeSlug,plan,password_hash AS passwordHash,password_salt AS passwordSalt FROM sellers WHERE email=?").bind(email).first();
         const candidate = await passwordHash(password, account?.passwordSalt || "00000000000000000000000000000000");
         if (!account || candidate !== account.passwordHash) return json({ error: "E-mail ou senha incorretos." }, 401);
         const token = randomToken();
         await db.prepare("INSERT INTO sessions (token_hash,seller_id,expires_at) VALUES (?,?,?)").bind(await digest(token).then(hex), account.id, Date.now() + WEEK * 1e3).run();
-        return json({ seller: { id: account.id, email: account.email, displayName: account.displayName } }, 200, { "set-cookie": cookie(token, WEEK) });
+        return json({ seller: { id: account.id, email: account.email, displayName: account.displayName, storeSlug: account.storeSlug, plan: account.plan } }, 200, { "set-cookie": cookie(token, WEEK) });
       }
       if (url.pathname === "/api/password-reset" && request.method === "POST") {
         if (!env.RESEND_API_KEY || !env.MAIL_FROM) return json({ error: "A recupera\xE7\xE3o por e-mail ainda n\xE3o foi configurada." }, 503);
@@ -179,8 +210,8 @@ Se voc\xEA n\xE3o pediu a redefini\xE7\xE3o, ignore este e-mail.`, html: `<p>Rec
         if (url.searchParams.get("mine") === "1") {
           const seller = await currentSeller(request, db);
           if (!seller) return json({ error: "Entre na sua conta." }, 401);
-          const rows2 = await db.prepare("SELECT id,seller_id AS sellerId,make,model,year,mileage,price,location,image,description,whatsapp,created_at AS createdAt FROM listings WHERE seller_id=? ORDER BY created_at DESC").bind(seller.id).all();
-          return json({ listings: rows2.results.map(safeListing) });
+          const rows2 = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,COALESCE(listing_metrics.views,0) AS views,COALESCE(listing_metrics.whatsapp_clicks,0) AS whatsappClicks FROM listings LEFT JOIN listing_metrics ON listing_metrics.listing_id=listings.id WHERE listings.seller_id=? ORDER BY listings.created_at DESC").bind(seller.id).all();
+          return json({ listings: rows2.results.map((row) => ({ ...safeListing(row), views: row.views, whatsappClicks: row.whatsappClicks })) });
         }
         const rows = await db.prepare("SELECT listings.id,listings.seller_id AS sellerId,listings.make,listings.model,listings.year,listings.mileage,listings.price,listings.location,listings.image,listings.description,listings.whatsapp,listings.created_at AS createdAt,sellers.display_name AS sellerName FROM listings JOIN sellers ON sellers.id=listings.seller_id ORDER BY listings.created_at DESC LIMIT 100").all();
         return json({ listings: rows.results });

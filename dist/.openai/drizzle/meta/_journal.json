@@ -15,6 +15,13 @@
       "when": 1790703334039,
       "tag": "0001_fancy_dragon_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790706758702,
+      "tag": "0002_striped_donald_blake",
+      "breakpoints": true
     }
   ]
 }

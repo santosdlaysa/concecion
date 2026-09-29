@@ -10,3 +10,4 @@
 @media(max-width:600px){.search-field{width:100%;min-width:0}.search-bar>*{min-width:0}.search-bar label:not(.search-field){display:flex;flex-direction:column}.search-bar select{max-width:100%}.market-dialog .search-submit{white-space:normal}}
 .photo-upload input[type=file]{height:auto;padding:12px;border:1px dashed #ffffff30;background:#ffffff05}.photo-upload input[type=file]::file-selector-button{background:#27352b;color:#e9ede7;border:1px solid #ffffff22;border-radius:4px;padding:8px 11px;margin-right:12px}
  .seller-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:6px}.seller-actions #share-message{font-size:12px;color:var(--lime)}#search-form[hidden]{display:none}
+.card-metrics{display:flex;align-items:center;gap:8px;margin:0;font-size:12px;color:#b8c4b6;letter-spacing:.02em}.card-metrics i{color:#5a655a;font-style:normal}
