@@ -2,3 +2,7 @@ node_modules/
 *.zip
 /image.png
 /site.tar.gz
+/.login-release/
+/login-source.tar
+/site-login.tar.gz
+/marketplace-deploy.tar.gz
